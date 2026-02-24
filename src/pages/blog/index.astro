@@ -1,0 +1,54 @@
+---
+import { getCollection } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+const posts = (await getCollection("blog"))
+  .filter((p) => !p.data.draft)
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+
+// Group posts by "Month YYYY"
+const groups: { label: string; posts: typeof posts }[] = [];
+for (const post of posts) {
+  const label = post.data.date.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const last = groups.at(-1);
+  if (last && last.label === label) {
+    last.posts.push(post);
+  } else {
+    groups.push({ label, posts: [post] });
+  }
+}
+---
+
+<Base title="Blog — notyce.systems">
+  <h1>Blog</h1>
+  {
+    groups.map((group) => (
+      <section class="blog-group">
+        <h4>{group.label}</h4>
+        <ul class="blog-list">
+          {group.posts.map((entry) => (
+            <li>
+              <span class="date">
+                {entry.data.date.toLocaleDateString("en-US", {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                  timeZone: "UTC",
+                })}
+              </span>
+              {" — "}
+              <a href={`/blog/${entry.id}`}>{entry.data.title}</a>
+              {entry.data.description && (
+                <div>{entry.data.description}</div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))
+  }
+</Base>
