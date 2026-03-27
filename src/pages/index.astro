@@ -1,16 +1,622 @@
 ---
-import Base from "../layouts/Base.astro";
+// WebGL animated grid landing page
+// Original home page content is at /home
 ---
 
-<Base title="notyce.systems">
-  <p>
-    <strong>notyce.systems</strong> 
-  </p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>notyce.systems</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    .zoom-message {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      padding: 32px 40px; border-radius: 12px;
+      background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(12px);
+      color: rgba(255, 255, 255, 0.9); font: 15px/1.7 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      white-space: pre; letter-spacing: 0.04em;
+      pointer-events: none; user-select: none;
+      opacity: 0; transition: none; z-index: 10;
+    }
+    .enter-link {
+      position: fixed; bottom: 32px; right: 32px; z-index: 20;
+      color: rgba(255, 255, 255, 0.35);
+      font: 500 13px/1 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      letter-spacing: 0.12em; text-decoration: none;
+      transition: color 0.3s;
+    }
+    .enter-link:hover { color: rgba(255, 255, 255, 0.9); }
+  </style>
+</head>
+<body>
+  <canvas id="grid"></canvas>
+  <div class="zoom-message" id="zoomMsg">hello notyce.systems
 
+76 31 2E 31</div>
+  <a class="enter-link" href="/home">ENTER ↗</a>
 
-  <div class="keywords">
-    <strong>Keywords:</strong> computational design, open source,
-    systems thinking, agentic coding, life observability
-  </div>
+  <script is:inline>
+    const canvas = document.getElementById('grid');
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+    if (!gl) {
+      document.body.innerHTML = '<p style="color:#fff;text-align:center;margin-top:40vh">WebGL 2 required</p>';
+      throw new Error('No WebGL 2');
+    }
 
-</Base>
+    const VS = `#version 300 es
+    in vec2 aPos;
+    void main() { gl_Position = vec4(aPos, 0, 1); }`;
+
+    const FS = `#version 300 es
+    precision highp float;
+    precision highp int;
+
+    uniform vec2  uRes;
+    uniform float uScale;
+    uniform vec2  uOrigin;
+    uniform float uTime;
+    uniform vec2  uCell;
+    uniform float uGap;
+    uniform int   uShape;
+    uniform float uDpr;
+    uniform sampler2D uSnakeTex;
+    uniform vec2  uGridMin;
+    uniform vec2  uGridSize;
+
+    out vec4 outColor;
+
+    float cellHash(int x, int y) {
+      uint h = (uint(x) * 0x68E31DA4u) ^ (uint(y) * 0xB5026F5Au) ^ 0x9E3779B9u;
+      h = ((h >> 16u) ^ h) * 0x045d9f3bu;
+      h = ((h >> 16u) ^ h) * 0x045d9f3bu;
+      h = (h >> 16u) ^ h;
+      return float(h) / 4294967296.0;
+    }
+
+    void main() {
+      vec2 px = gl_FragCoord.xy / uDpr;
+      px.y = uRes.y - px.y;
+
+      vec2 w = (px - uOrigin) / uScale;
+      vec2 step = uCell + uGap;
+      vec2 cell = floor(w / step + 0.5);
+      vec2 local = w - cell * step;
+      vec2 hs = uCell * 0.5;
+
+      float phase = cellHash(int(cell.x), int(cell.y)) * 6.283185;
+      float val = sin(uTime * 0.0015 + phase) * 0.5 + 0.5;
+
+      if (uGridSize.x > 0.0) {
+        vec2 tc = (cell - uGridMin + 0.5) / uGridSize;
+        vec2 sd = texture(uSnakeTex, tc).rg;
+        val = mix(val, sd.g, sd.r);
+      }
+
+      float aa = 1.0 / (hs.x * uScale * uDpr);
+      float mask;
+      if (uShape == 1) {
+        vec2 n = local / hs;
+        mask = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dot(n, n));
+      } else {
+        vec2 d = abs(local) - hs;
+        float edge = max(d.x, d.y);
+        float aaW = 1.0 / (uScale * uDpr);
+        mask = 1.0 - smoothstep(-aaW, aaW, edge);
+      }
+
+      vec3 bg = vec3(0.0667);
+      outColor = vec4(mix(bg, vec3(val), mask), 1);
+    }`;
+
+    function compile(src, type) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(VS, gl.VERTEX_SHADER));
+    gl.attachShader(prog, compile(FS, gl.FRAGMENT_SHADER));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+      console.error(gl.getProgramInfoLog(prog));
+    gl.useProgram(prog);
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const quadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const u = {};
+    for (const n of ['uRes','uScale','uOrigin','uTime','uCell','uGap','uShape','uDpr',
+                      'uSnakeTex','uGridMin','uGridSize'])
+      u[n] = gl.getUniformLocation(prog, n);
+
+    gl.uniform2f(u.uCell, 24, 24);
+    gl.uniform1f(u.uGap, 8);
+
+    const snakeTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, snakeTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    gl.uniform1i(u.uSnakeTex, 0);
+
+    let lastTexW = 1, lastTexH = 1;
+    let cachedShape = -1, cachedDpr = -1;
+
+    let width = 0, height = 0;
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    const state = {
+      scale: 1, targetScale: 1,
+      minScale: 0.1, maxScale: 8,
+      originX: 0, originY: 0,
+      targetOriginX: 0, targetOriginY: 0,
+      anchorX: 0, anchorY: 0,
+      zoomVelocity: 0, maxZoomVelocity: 8,
+      shape: 'rect',
+      baseRectWidth: 24, baseRectHeight: 24, baseGap: 8,
+      zoomSensitivity: 0.02, inertiaDamping: 8,
+      lastTime: 0, initialized: false,
+    };
+
+    const MAX_SNAKES = 5;
+    const SPAWN_MIN = 3000;
+    const SPAWN_MAX = 7000;
+    const SNAKE_SPEED = 10;
+
+    const snakes = [];
+    let nextSnakeSpawn = 2000;
+
+    function randomViewCol() {
+      const step = state.baseRectWidth + state.baseGap;
+      const center = ((width * 0.5 - state.originX) / state.scale) / step;
+      const span = (width / state.scale) / step;
+      return Math.round(center + (Math.random() - 0.5) * span * 0.8);
+    }
+    function randomViewRow() {
+      const step = state.baseRectHeight + state.baseGap;
+      const center = ((height * 0.5 - state.originY) / state.scale) / step;
+      const span = (height / state.scale) / step;
+      return Math.round(center + (Math.random() - 0.5) * span * 0.8);
+    }
+
+    function generateSnakePath(c1, r1, c2, r2) {
+      const tmp = [c1, r1];
+      let col = c1, row = r1;
+      const manhattan = Math.abs(c2 - c1) + Math.abs(r2 - r1);
+      const maxSteps = manhattan + 30;
+      let steps = 1;
+
+      while ((col !== c2 || row !== r2) && steps < maxSteps) {
+        const dx = c2 - col, dy = r2 - row;
+        const remaining = Math.abs(dx) + Math.abs(dy);
+        const slack = maxSteps - steps - remaining;
+
+        if (slack > 2 && Math.random() < 0.2) {
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            row += Math.random() < 0.5 ? 1 : -1;
+          } else {
+            col += Math.random() < 0.5 ? 1 : -1;
+          }
+          tmp.push(col, row);
+          steps++;
+          continue;
+        }
+
+        let moveH;
+        if (dx === 0) moveH = false;
+        else if (dy === 0) moveH = true;
+        else moveH = Math.random() < Math.abs(dx) / remaining;
+
+        if (moveH) col += dx > 0 ? 1 : -1;
+        else row += dy > 0 ? 1 : -1;
+        tmp.push(col, row);
+        steps++;
+      }
+      return new Int32Array(tmp);
+    }
+
+    function spawnSnake(time) {
+      const c1 = randomViewCol(), r1 = randomViewRow();
+      const angle = Math.random() * Math.PI * 2;
+      const len = 30 + Math.random() * 50;
+      const c2 = Math.round(c1 + Math.cos(angle) * len);
+      const r2 = Math.round(r1 + Math.sin(angle) * len);
+      const path = generateSnakePath(c1, r1, c2, r2);
+
+      snakes.push({
+        path,
+        pathLen: path.length >> 1,
+        birthTime: time,
+        brightness: Math.random() < 0.5 ? 1.0 : 0.0,
+        headIdx: 0,
+        fading: false,
+        fadeStart: 0,
+      });
+    }
+
+    const FADE_DURATION = 800;
+
+    function updateSnakes(time) {
+      for (let i = snakes.length - 1; i >= 0; i--) {
+        if (snakes[i].fading && time - snakes[i].fadeStart >= FADE_DURATION) {
+          snakes[i] = snakes[snakes.length - 1];
+          snakes.pop();
+        }
+      }
+      for (const s of snakes) {
+        if (s.fading) continue;
+        const elapsed = (time - s.birthTime) * 0.001;
+        s.headIdx = Math.min(elapsed * SNAKE_SPEED, s.pathLen);
+        if (s.headIdx >= s.pathLen) {
+          s.fading = true;
+          s.fadeStart = time;
+        }
+      }
+      if (time > nextSnakeSpawn && snakes.length < MAX_SNAKES) {
+        spawnSnake(time);
+        nextSnakeSpawn = time + SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
+      }
+    }
+
+    const TEXT_SPAWN_MIN = 10000;
+    const TEXT_SPAWN_MAX = 18000;
+    const TEXT_FADE_IN = 1600;
+    const TEXT_HOLD = 3000;
+    const TEXT_FADE_OUT = 1800;
+    const TEXT_FADE_OUT_END = TEXT_FADE_IN + TEXT_HOLD + TEXT_FADE_OUT;
+    const MAX_TEXT_REVEALS = 2;
+    const TEXT_STAGGER = 1500;
+
+    const textBitmap = (() => {
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      const size = 16;
+      ctx.font = `${size}px Helvetica, Arial, sans-serif`;
+      const m = ctx.measureText('notyce.systems');
+      c.width = Math.ceil(m.width) + 2;
+      c.height = size + 4;
+      ctx.font = `${size}px Helvetica, Arial, sans-serif`;
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'top';
+      ctx.fillText('notyce.systems', 1, 2);
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
+
+      const rawCols = [], rawRows = [], rawDelays = [];
+      for (let y = 0; y < c.height; y++)
+        for (let x = 0; x < c.width; x++)
+          if (data[(y * c.width + x) * 4 + 3] > 100) {
+            rawCols.push(x);
+            rawRows.push(y);
+            rawDelays.push(Math.random() * TEXT_STAGGER);
+          }
+
+      const indices = Array.from({ length: rawCols.length }, (_, i) => i);
+      indices.sort((a, b) => rawDelays[a] - rawDelays[b]);
+
+      const count = indices.length;
+      const cols = new Int32Array(count);
+      const rows = new Int32Array(count);
+      const delays = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        const j = indices[i];
+        cols[i] = rawCols[j];
+        rows[i] = rawRows[j];
+        delays[i] = rawDelays[j];
+      }
+
+      return { cols, rows, delays, count, w: c.width, h: c.height };
+    })();
+
+    const textReveals = [];
+    let nextTextSpawn = 5000;
+
+    function spawnTextReveal(time) {
+      const col = randomViewCol() - Math.floor(textBitmap.w / 2);
+      const row = randomViewRow() - Math.floor(textBitmap.h / 2);
+      textReveals.push({
+        originCol: col,
+        originRow: row,
+        birthTime: time,
+        brightness: Math.random() < 0.5 ? 1.0 : 0.0,
+      });
+    }
+
+    function updateTextReveals(time) {
+      const total = TEXT_FADE_OUT_END + TEXT_STAGGER;
+      for (let i = textReveals.length - 1; i >= 0; i--) {
+        if (time - textReveals[i].birthTime >= total) {
+          textReveals[i] = textReveals[textReveals.length - 1];
+          textReveals.pop();
+        }
+      }
+      if (time > nextTextSpawn && textReveals.length < MAX_TEXT_REVEALS) {
+        spawnTextReveal(time);
+        nextTextSpawn = time + TEXT_SPAWN_MIN + Math.random() * (TEXT_SPAWN_MAX - TEXT_SPAWN_MIN);
+      }
+    }
+
+    let snakeTexBuf = new Uint8Array(512 * 512 * 4);
+    let snakeTexBufSize = 512 * 512 * 4;
+    let dirtyOffsets = new Int32Array(4096);
+    let dirtyCount = 0;
+    let prevColStart = 0, prevRowStart = 0, prevTexW = 0, prevTexH = 0;
+
+    function markDirty(idx) {
+      if (dirtyCount === dirtyOffsets.length) {
+        const bigger = new Int32Array(dirtyOffsets.length * 2);
+        bigger.set(dirtyOffsets);
+        dirtyOffsets = bigger;
+      }
+      dirtyOffsets[dirtyCount++] = idx;
+    }
+
+    function buildOverlayTexture(colStart, colEnd, rowStart, rowEnd, time) {
+      const texW = colEnd - colStart + 1;
+      const texH = rowEnd - rowStart + 1;
+      const needed = texW * texH * 4;
+
+      if (needed > snakeTexBufSize) {
+        snakeTexBuf = new Uint8Array(needed);
+        snakeTexBufSize = needed;
+        dirtyCount = 0;
+      } else if (colStart !== prevColStart || rowStart !== prevRowStart ||
+                 texW !== prevTexW || texH !== prevTexH) {
+        snakeTexBuf.fill(0, 0, needed);
+        dirtyCount = 0;
+      } else {
+        const buf = snakeTexBuf;
+        for (let i = 0; i < dirtyCount; i++) {
+          const off = dirtyOffsets[i];
+          buf[off] = 0;
+          buf[off + 1] = 0;
+        }
+      }
+      prevColStart = colStart;
+      prevRowStart = rowStart;
+      prevTexW = texW;
+      prevTexH = texH;
+      dirtyCount = 0;
+
+      for (const s of snakes) {
+        const bright = Math.round(s.brightness * 255);
+        const end = Math.floor(s.headIdx);
+        let blend = 255;
+        if (s.fading) {
+          const t = (time - s.fadeStart) / FADE_DURATION;
+          const ease = 1 - t * t;
+          blend = Math.round(Math.max(0, ease) * 255);
+        }
+        const path = s.path;
+        const limit = Math.min(end, s.pathLen);
+        for (let i = 0; i < limit; i++) {
+          const c = path[i * 2] - colStart;
+          const r = path[i * 2 + 1] - rowStart;
+          if (c < 0 || c >= texW || r < 0 || r >= texH) continue;
+          const idx = (r * texW + c) * 4;
+          snakeTexBuf[idx]     = blend;
+          snakeTexBuf[idx + 1] = bright;
+          markDirty(idx);
+        }
+      }
+
+      const tbCols = textBitmap.cols;
+      const tbRows = textBitmap.rows;
+      const tbDelays = textBitmap.delays;
+      const tbCount = textBitmap.count;
+
+      for (const tr of textReveals) {
+        const bright = Math.round(tr.brightness * 255);
+        const baseAge = time - tr.birthTime;
+
+        for (let i = 0; i < tbCount; i++) {
+          const age = baseAge - tbDelays[i];
+          if (age < 0) break;
+          if (age >= TEXT_FADE_OUT_END) continue;
+
+          let blend;
+          if (age < TEXT_FADE_IN) {
+            const t = age / TEXT_FADE_IN;
+            blend = t * t * (3 - 2 * t);
+          } else if (age < TEXT_FADE_IN + TEXT_HOLD) {
+            blend = 1;
+          } else {
+            const t = (age - TEXT_FADE_IN - TEXT_HOLD) / TEXT_FADE_OUT;
+            blend = 1 - t * t * (3 - 2 * t);
+          }
+          const blendByte = (blend * 255 + 0.5) | 0;
+          if (blendByte <= 0) continue;
+
+          const c = tbCols[i] + tr.originCol - colStart;
+          const r = tbRows[i] + tr.originRow - rowStart;
+          if (c < 0 || c >= texW || r < 0 || r >= texH) continue;
+          const idx = (r * texW + c) * 4;
+          if (blendByte > snakeTexBuf[idx]) {
+            snakeTexBuf[idx]     = blendByte;
+            snakeTexBuf[idx + 1] = bright;
+            markDirty(idx);
+          }
+        }
+      }
+
+      return { texW, texH };
+    }
+
+    function resize() {
+      const oldW = width, oldH = height;
+      const oldCX = oldW * 0.5, oldCY = oldH * 0.5;
+      const cwx = state.initialized ? (oldCX - state.originX) / state.scale : 0;
+      const cwy = state.initialized ? (oldCY - state.originY) / state.scale : 0;
+      const tcwx = state.initialized ? (oldCX - state.targetOriginX) / state.targetScale : 0;
+      const tcwy = state.initialized ? (oldCY - state.targetOriginY) / state.targetScale : 0;
+
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+
+      const cx = width * 0.5, cy = height * 0.5;
+      if (!state.initialized) {
+        state.originX = state.targetOriginX = cx;
+        state.originY = state.targetOriginY = cy;
+        state.anchorX = cx; state.anchorY = cy;
+        state.initialized = true;
+        return;
+      }
+      state.originX = cx - cwx * state.scale;
+      state.originY = cy - cwy * state.scale;
+      state.targetOriginX = cx - tcwx * state.targetScale;
+      state.targetOriginY = cy - tcwy * state.targetScale;
+    }
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    state.shape = Math.random() < 0.5 ? 'rect' : 'circle';
+
+    const zoomMsg = document.getElementById('zoomMsg');
+    const ZOOM_MSG_START = 6;
+    const ZOOM_MSG_FULL = state.maxScale;
+
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => resize()).observe(document.documentElement);
+    } else {
+      let resizeTimer = 0;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(resize, 80);
+      });
+    }
+
+    let hiddenAt = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        hiddenAt = performance.now();
+      } else if (hiddenAt > 0) {
+        const gap = performance.now() - hiddenAt;
+        for (const s of snakes) {
+          s.birthTime += gap;
+          if (s.fading) s.fadeStart += gap;
+        }
+        for (const tr of textReveals) {
+          tr.birthTime += gap;
+        }
+        nextSnakeSpawn += gap;
+        nextTextSpawn += gap;
+        state.lastTime = 0;
+        hiddenAt = 0;
+      }
+    });
+
+    window.addEventListener('wheel', e => {
+      const dm = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? height : 1;
+      state.targetScale = state.scale;
+      state.targetOriginX = state.originX;
+      state.targetOriginY = state.originY;
+      state.anchorX = e.clientX;
+      state.anchorY = e.clientY;
+      state.zoomVelocity = clamp(
+        state.zoomVelocity - e.deltaY * dm * state.zoomSensitivity,
+        -state.maxZoomVelocity, state.maxZoomVelocity);
+      e.preventDefault();
+    }, { passive: false });
+
+    function draw(time) {
+      if (!state.lastTime) state.lastTime = time;
+      const dt = Math.min((time - state.lastTime) / 1000, 0.05);
+      state.lastTime = time;
+
+      if (Math.abs(state.zoomVelocity) > 0.0001) {
+        const pwx = (state.anchorX - state.targetOriginX) / state.targetScale;
+        const pwy = (state.anchorY - state.targetOriginY) / state.targetScale;
+        const ns = clamp(state.targetScale * Math.exp(state.zoomVelocity * dt), state.minScale, state.maxScale);
+        state.targetScale = ns;
+        state.targetOriginX = state.anchorX - pwx * ns;
+        state.targetOriginY = state.anchorY - pwy * ns;
+        state.zoomVelocity *= Math.exp(-state.inertiaDamping * dt);
+        if (ns === state.minScale || ns === state.maxScale) state.zoomVelocity *= 0.6;
+      } else {
+        state.zoomVelocity = 0;
+      }
+
+      const sm = 1 - Math.exp(-dt * 12);
+      state.scale += (state.targetScale - state.scale) * sm;
+      state.originX += (state.targetOriginX - state.originX) * sm;
+      state.originY += (state.targetOriginY - state.originY) * sm;
+
+      updateSnakes(time);
+      updateTextReveals(time);
+
+      const stepX = state.baseRectWidth + state.baseGap;
+      const stepY = state.baseRectHeight + state.baseGap;
+      const leftWorld = -state.originX / state.scale;
+      const rightWorld = (width - state.originX) / state.scale;
+      const topWorld = -state.originY / state.scale;
+      const bottomWorld = (height - state.originY) / state.scale;
+      const colStart = Math.floor(leftWorld / stepX) - 1;
+      const colEnd = Math.ceil(rightWorld / stepX) + 1;
+      const rowStart = Math.floor(topWorld / stepY) - 1;
+      const rowEnd = Math.ceil(bottomWorld / stepY) + 1;
+
+      const { texW, texH } = buildOverlayTexture(colStart, colEnd, rowStart, rowEnd, time);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, snakeTex);
+      if (texW !== lastTexW || texH !== lastTexH) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, texW, texH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        lastTexW = texW;
+        lastTexH = texH;
+      }
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texW, texH, gl.RGBA, gl.UNSIGNED_BYTE,
+        snakeTexBuf, 0);
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.uniform2f(u.uRes, width, height);
+      gl.uniform1f(u.uScale, state.scale);
+      gl.uniform2f(u.uOrigin, state.originX, state.originY);
+      gl.uniform1f(u.uTime, time);
+      gl.uniform2f(u.uGridMin, colStart, rowStart);
+      gl.uniform2f(u.uGridSize, texW, texH);
+
+      const shapeInt = state.shape === 'circle' ? 1 : 0;
+      if (shapeInt !== cachedShape) {
+        gl.uniform1i(u.uShape, shapeInt);
+        cachedShape = shapeInt;
+      }
+      if (dpr !== cachedDpr) {
+        gl.uniform1f(u.uDpr, dpr);
+        cachedDpr = dpr;
+      }
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      const zoomT = clamp((state.scale - ZOOM_MSG_START) / (ZOOM_MSG_FULL - ZOOM_MSG_START), 0, 1);
+      zoomMsg.style.opacity = zoomT;
+
+      requestAnimationFrame(draw);
+    }
+
+    resize();
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>
