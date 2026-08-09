@@ -25,4 +25,7 @@ pnpm-debug.log*
 
 # Astro
 .astro/
+
+# Wrangler
+.wrangler/
 .claude
