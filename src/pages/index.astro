@@ -13,8 +13,8 @@
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; font-family: system-ui, sans-serif; touch-action: none; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
     .zoom-message {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       padding: 32px 40px; border-radius: 12px;
@@ -539,6 +539,93 @@
         -state.maxZoomVelocity, state.maxZoomVelocity);
       e.preventDefault();
     }, { passive: false });
+
+    const pinch = { active: false, dist: 0, midX: 0, midY: 0, vel: 0, lastTime: 0 };
+
+    function beginPinch(t0, t1) {
+      pinch.active = true;
+      pinch.dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      pinch.midX = (t0.clientX + t1.clientX) * 0.5;
+      pinch.midY = (t0.clientY + t1.clientY) * 0.5;
+      pinch.vel = 0;
+      pinch.lastTime = performance.now();
+      state.zoomVelocity = 0;
+      state.targetScale = state.scale;
+      state.targetOriginX = state.originX;
+      state.targetOriginY = state.originY;
+    }
+
+    function applyPinchZoom(factor, mx, my, prevMidX, prevMidY) {
+      const ns = clamp(state.targetScale * factor, state.minScale, state.maxScale);
+      const pwx = (prevMidX - state.targetOriginX) / state.targetScale;
+      const pwy = (prevMidY - state.targetOriginY) / state.targetScale;
+      state.targetScale = ns;
+      state.targetOriginX = mx - pwx * ns;
+      state.targetOriginY = my - pwy * ns;
+      state.anchorX = mx;
+      state.anchorY = my;
+    }
+
+    window.addEventListener('touchstart', e => {
+      if (e.touches.length >= 2) {
+        e.preventDefault();
+        beginPinch(e.touches[0], e.touches[1]);
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (!pinch.active || e.touches.length < 2) return;
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const mx = (t0.clientX + t1.clientX) * 0.5;
+      const my = (t0.clientY + t1.clientY) * 0.5;
+      if (pinch.dist > 0 && dist > 0) {
+        applyPinchZoom(dist / pinch.dist, mx, my, pinch.midX, pinch.midY);
+        const now = performance.now();
+        const dt = Math.max((now - pinch.lastTime) / 1000, 0.001);
+        pinch.vel = pinch.vel * 0.7 + (Math.log(dist / pinch.dist) / dt) * 0.3;
+        pinch.lastTime = now;
+      }
+      pinch.dist = dist;
+      pinch.midX = mx;
+      pinch.midY = my;
+    }, { passive: false });
+
+    function endPinch(e) {
+      if (!pinch.active) return;
+      if (e.touches.length >= 2) {
+        beginPinch(e.touches[0], e.touches[1]);
+        return;
+      }
+      pinch.active = false;
+      const idle = performance.now() - pinch.lastTime;
+      state.zoomVelocity = idle < 100
+        ? clamp(pinch.vel, -state.maxZoomVelocity, state.maxZoomVelocity)
+        : 0;
+    }
+    window.addEventListener('touchend', endPinch);
+    window.addEventListener('touchcancel', endPinch);
+
+    // Safari delivers trackpad pinch as gesture events, not ctrl+wheel; on iOS they
+    // fire alongside the touch handlers above, so only drive zoom when no touch pinch owns it.
+    let gestureScale = 1;
+    window.addEventListener('gesturestart', e => {
+      e.preventDefault();
+      gestureScale = e.scale;
+      if (pinch.active) return;
+      state.zoomVelocity = 0;
+      state.targetScale = state.scale;
+      state.targetOriginX = state.originX;
+      state.targetOriginY = state.originY;
+    }, { passive: false });
+    window.addEventListener('gesturechange', e => {
+      e.preventDefault();
+      if (pinch.active || gestureScale <= 0) return;
+      applyPinchZoom(e.scale / gestureScale, e.clientX, e.clientY, e.clientX, e.clientY);
+      gestureScale = e.scale;
+    }, { passive: false });
+    window.addEventListener('gestureend', e => e.preventDefault(), { passive: false });
 
     function draw(time) {
       if (!state.lastTime) state.lastTime = time;
